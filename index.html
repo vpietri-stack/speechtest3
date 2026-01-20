@@ -136,7 +136,10 @@
     </div>
 
     <script>
-        const MODEL_URL = './model.tar.gz';
+        const FAST_MODEL_URL = 'https://ghp.ci/https://github.com/vpietri-stack/speechtest3/raw/main/model.tar.gz';
+        const LOCAL_MODEL_URL = './model.tar.gz';
+        const CACHE_NAME = 'vosk-model-cache-v1';
+
         let model = null;
         let recognizer = null;
         let mediaStream = null;
@@ -160,41 +163,14 @@
                 return;
             }
 
-            statusMsg.textContent = "Downloading speech model...";
-            progress.style.display = "block";
-
             try {
-                // 1. Fetch Model with Progress
-                const response = await fetch(MODEL_URL);
-                if (!response.ok) throw new Error(`Failed to fetch model: ${response.statusText}`);
-
-                const contentLength = +response.headers.get('Content-Length');
-                const total = contentLength || 20 * 1024 * 1024; // Fallback to 20MB approx for tar.gz if header missing
-
-                const reader = response.body.getReader();
-                let receivedLength = 0;
-                let chunks = [];
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    chunks.push(value);
-                    receivedLength += value.length;
-
-                    // Update Progress
-                    const pct = Math.round((receivedLength / total) * 100);
-                    progress.value = pct;
-                    statusMsg.textContent = `Downloading speech model: ${pct}%`;
-                }
+                // 1. Smart Model Loading
+                const blob = await loadModelSmartly(statusMsg, progress);
 
                 statusMsg.textContent = "Extracting voice data...";
-                // Note: using input type "application/gzip" or just letting Vosk handle the blob usually works better with the tar.gz if the library supports it.
-                // The vosk-browser build typically expects a zip or tar.gz. We pass the blob URL.
-                const blob = new Blob(chunks, { type: "application/x-gzip" }); // tar.gz is gzip
                 const modelUrl = URL.createObjectURL(blob);
 
                 // 2. Initialize Vosk
-                // Note: Vosk.createModel accepts a URL. We pass the Blob URL.
                 const channel = new MessageChannel();
                 model = await Vosk.createModel(modelUrl);
 
@@ -203,18 +179,106 @@
                 progress.style.display = "none";
                 listenBtn.style.display = "inline-block";
 
-                // Initialize Audio Context ahead of time to handle permissions
+                // Initialize Audio Context (Lazy load details later, but setup recognizer)
                 recognizer = new model.KaldiRecognizer(48000);
-
-                // Set words to true for better processing if needed, though default is usually fine for simple tasks.
                 recognizer.setWords(true);
-
                 listenBtn.onclick = toggleListen;
 
             } catch (err) {
                 console.error(err);
                 statusMsg.textContent = "Error: " + err.message;
                 statusMsg.style.color = "red";
+            }
+        }
+
+        async function loadModelSmartly(statusMsg, progress) {
+            // A. Check Cache First
+            try {
+                const cache = await caches.open(CACHE_NAME);
+                const cachedResponse = await cache.match(FAST_MODEL_URL); // Key off the main/fast URL
+
+                if (cachedResponse) {
+                    console.log("Loading from cache...");
+                    statusMsg.textContent = "Loading from cache...";
+                    return await cachedResponse.blob();
+                }
+            } catch (e) {
+                console.warn("Cache access failed", e);
+            }
+
+            // B. Try Fast Mirror with Timeout
+            try {
+                console.log("Attempting fast download...");
+                statusMsg.textContent = "Downloading from fast mirror...";
+                progress.style.display = "block";
+
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+                const response = await fetch(FAST_MODEL_URL, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) throw new Error("Fast mirror failed");
+
+                // Track Progress logic wrapper
+                const blob = await fetchWithProgress(response, statusMsg, progress, "Downloading from fast mirror");
+
+                // Save to Cache
+                saveToCache(blob);
+
+                return blob;
+
+            } catch (err) {
+                console.warn("Fast download failed or timed out:", err);
+                // C. Fallback to Local
+                statusMsg.textContent = "Connection slow. Switching to local backup...";
+                console.log("Switching to local backup...");
+
+                const response = await fetch(LOCAL_MODEL_URL);
+                if (!response.ok) throw new Error("Local model file missing");
+
+                const blob = await fetchWithProgress(response, statusMsg, progress, "Downloading from local backup");
+
+                // Save to Cache (so next time it is instant)
+                saveToCache(blob);
+
+                return blob;
+            }
+        }
+
+        async function fetchWithProgress(response, statusMsg, progress, messagePrefix) {
+            const contentLength = +response.headers.get('Content-Length');
+            const total = contentLength || 20 * 1024 * 1024; // ~20MB fallback
+
+            const reader = response.body.getReader();
+            let receivedLength = 0;
+            let chunks = [];
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                receivedLength += value.length;
+
+                const pct = Math.round((receivedLength / total) * 100);
+                progress.value = pct;
+                statusMsg.textContent = `${messagePrefix}: ${pct}%`;
+            }
+
+            // Return as Blob using generic type (Vosk detects content)
+            return new Blob(chunks, { type: "application/x-gzip" });
+        }
+
+        async function saveToCache(blob) {
+            try {
+                const cache = await caches.open(CACHE_NAME);
+                // We save it under the FAST_MODEL_URL key so that next time we find it there,
+                // effectively "upgrading" the user to a cached state regardless of where it came from.
+                const responseToCache = new Response(blob);
+                await cache.put(FAST_MODEL_URL, responseToCache);
+                console.log("Model saved to cache.");
+            } catch (e) {
+                console.warn("Failed to save to cache", e);
             }
         }
 
@@ -238,38 +302,30 @@
                         echoCancellation: true,
                         noiseSuppression: true,
                         channelCount: 1,
-                        sampleRate: 48000 // Align with Vosk
+                        sampleRate: 48000
                     }
                 });
 
                 const source = audioContext.createMediaStreamSource(mediaStream);
 
-                // Use ScriptProcessor for wide compatibility
+                // Use ScriptProcessor for max compatibility on older Androids etc.
                 recognizerNode = audioContext.createScriptProcessor(4096, 1, 1);
 
                 recognizerNode.onaudioprocess = (event) => {
                     if (!recognizer) return;
                     try {
-                        const inputBuffer = event.inputBuffer;
-                        // const channelData = inputBuffer.getChannelData(0); 
-                        // Vosk acceptWaveform expects buffer
                         recognizer.acceptWaveform(event.inputBuffer);
                     } catch (e) {
                         console.error("Audio Process Error", e);
                     }
                 };
 
-                // Listen for results
                 recognizer.on("result", (message) => {
-                    const resultText = message.result.text;
-                    if (resultText) {
-                        handleResult(resultText);
-                    }
+                    if (message.result.text) handleResult(message.result.text);
                 });
 
                 recognizer.on("partialresult", (message) => {
-                    const partial = message.result.partial;
-                    document.getElementById('resultText').innerText = partial + "...";
+                    document.getElementById('resultText').innerText = message.result.partial + "...";
                 });
 
                 source.connect(recognizerNode);
@@ -304,8 +360,6 @@
             console.log("Result:", text);
             document.getElementById('resultText').innerText = text;
 
-            // Check Similarity
-            // Use window.stringSimilarity to be safe with the global build
             const similarity = stringSimilarity.compareTwoStrings(text.toLowerCase(), currentWord.toLowerCase());
             const scorePct = Math.round(similarity * 100);
 
@@ -317,28 +371,20 @@
                 document.getElementById('statusMessage').textContent = "✅ Correct! Loading next...";
                 document.getElementById('statusMessage').style.color = "green";
                 stopListening();
-
-                setTimeout(() => {
-                    nextQuestion();
-                }, 1500);
+                setTimeout(nextQuestion, 1500);
             } else {
                 document.getElementById('statusMessage').textContent = "Try Again";
-                // Don't stop listening, let them try again immediately within the same session if possible
-                // But Vosk usually finalizes on result, so we might need to restart or just let the flow continue
-                // For this simple logic, we keep current listening state until user stops or success.
             }
         }
 
         function nextQuestion() {
             alert("Next Question Triggered!");
-            // Reset logic
             document.getElementById('statusMessage').textContent = "Ready! Click the microphone to start.";
             document.getElementById('statusMessage').style.color = "#666";
             document.getElementById('resultText').innerText = "...";
             document.getElementById('matchScore').style.display = "none";
         }
 
-        // Initialize on load
         window.onload = init;
 
     </script>
