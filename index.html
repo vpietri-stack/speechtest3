@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vocab Speech Test</title>
+    <script src="coi-serviceworker.js"></script>
+    <!-- Vosk Browser and String Similarity via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk.js"></script>
+    <script src="https://unpkg.com/string-similarity/umd/string-similarity.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: #f0f2f5;
+            margin: 0;
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            color: #333;
+        }
+
+        .status {
+            margin: 15px 0;
+            font-weight: bold;
+            color: #666;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 1rem;
+            cursor: pointer;
+            border: none;
+            border-radius: 6px;
+            margin: 5px;
+            transition: background 0.2s;
+        }
+
+        #listenBtn {
+            background-color: #007bff;
+            color: white;
+            display: none;
+        }
+
+        #listenBtn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        #listenBtn.listening {
+            background-color: #dc3545;
+            animation: pulse 1.5s infinite;
+        }
+
+        progress {
+            width: 100%;
+            margin-top: 10px;
+            height: 20px;
+            display: none;
+        }
+
+        .result-box {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            min-height: 50px;
+            font-size: 1.2rem;
+        }
+
+        .target-word {
+            color: #888;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+
+        .match-score {
+            font-size: 0.8rem;
+            color: #28a745;
+            margin-top: 5px;
+            display: none;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.05);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>Speech Quiz Test</h1>
+
+        <div class="status" id="statusMessage">Initializing...</div>
+
+        <progress id="modelProgress" value="0" max="100"></progress>
+
+        <!-- Target Word for Testing -->
+        <div class="target-word">Target: <span id="targetWord">hello</span></div>
+
+        <button id="listenBtn">🎤 Listen</button>
+
+        <div class="result-box" id="resultText">...</div>
+        <div class="match-score" id="matchScore"></div>
+    </div>
+
+    <script>
+        const MODEL_URL = 'vosk-model-small-en-us.zip';
+        let model = null;
+        let recognizer = null;
+        let mediaStream = null;
+        let audioContext = null;
+        let recognizerNode = null;
+        let isListening = false;
+
+        // Mock Game Logic
+        const currentWord = "hello";
+        document.getElementById('targetWord').textContent = currentWord;
+
+        async function init() {
+            const statusMsg = document.getElementById('statusMessage');
+            const progress = document.getElementById('modelProgress');
+            const listenBtn = document.getElementById('listenBtn');
+
+            statusMsg.textContent = "Downloading Model...";
+            progress.style.display = "block";
+
+            try {
+                // 1. Fetch Model with Progress
+                const response = await fetch(MODEL_URL);
+                if (!response.ok) throw new Error(`Failed to fetch model: ${response.statusText}`);
+
+                const contentLength = +response.headers.get('Content-Length');
+                const total = contentLength || 50 * 1024 * 1024; // Fallback to 50MB if header missing
+
+                const reader = response.body.getReader();
+                let receivedLength = 0;
+                let chunks = [];
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    receivedLength += value.length;
+
+                    // Update Progress
+                    const pct = Math.round((receivedLength / total) * 100);
+                    progress.value = pct;
+                    statusMsg.textContent = `Downloading Model: ${pct}%`;
+                }
+
+                statusMsg.textContent = "Processing Model...";
+                const blob = new Blob(chunks, { type: "application/zip" });
+                const modelUrl = URL.createObjectURL(blob);
+
+                // 2. Initialize Vosk
+                // Note: Vosk.createModel accepts a URL. We pass the Blob URL.
+                // Depending on the channel build, we might need configuration. 
+                // We use the default generic build.
+                const channel = new MessageChannel();
+                model = await Vosk.createModel(modelUrl);
+
+                // Creation complete
+                statusMsg.textContent = "Ready";
+                progress.style.display = "none";
+                listenBtn.style.display = "inline-block";
+
+                // Initialize Audio Context ahead of time to handle permissions
+                recognizer = new model.KaldiRecognizer(48000);
+
+                // Word List Grammar (Optional optimization)
+                // recognizer.setWords(true);
+
+                listenBtn.onclick = toggleListen;
+
+            } catch (err) {
+                console.error(err);
+                statusMsg.textContent = "Error: " + err.message;
+                statusMsg.style.color = "red";
+            }
+        }
+
+        async function toggleListen() {
+            if (isListening) {
+                stopListening();
+            } else {
+                startListening();
+            }
+        }
+
+        async function startListening() {
+            const listenBtn = document.getElementById('listenBtn');
+            const statusMsg = document.getElementById('statusMessage');
+
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: false,
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        channelCount: 1,
+                        sampleRate: 48000 // Align with Vosk
+                    }
+                });
+
+                const source = audioContext.createMediaStreamSource(mediaStream);
+
+                // Use AudioWorklet if available, or ScriptProcessor as fallback
+                // For simplicity in this single file, we use ScriptProcessor (deprecated but simple)
+                // or use the Vosk helper if available. 
+                // Let's use the provided Recognizer API pattern.
+
+                recognizerNode = audioContext.createScriptProcessor(4096, 1, 1);
+
+                recognizerNode.onaudioprocess = (event) => {
+                    if (!recognizer) return;
+                    try {
+                        const inputBuffer = event.inputBuffer;
+                        const channelData = inputBuffer.getChannelData(0); // Float32
+                        // Vosk expects AudioBuffer or similar. 
+                        // The vosk-browser library usually handles Float32Arrays if using the high level API
+                        // BUT common implementation requires sending the data to the recognizer:
+                        recognizer.acceptWaveform(event.inputBuffer);
+                    } catch (e) {
+                        console.error("Audio Process Error", e);
+                    }
+                };
+
+                // Listen for results
+                recognizer.on("result", (message) => {
+                    const resultText = message.result.text;
+                    if (resultText) {
+                        handleResult(resultText);
+                    }
+                });
+
+                recognizer.on("partialresult", (message) => {
+                    const partial = message.result.partial;
+                    document.getElementById('resultText').innerText = partial + "...";
+                });
+
+                source.connect(recognizerNode);
+                recognizerNode.connect(audioContext.destination);
+
+                isListening = true;
+                listenBtn.classList.add("listening");
+                listenBtn.textContent = "🛑 Stop";
+                statusMsg.textContent = "Listening...";
+
+            } catch (err) {
+                console.error(err);
+                statusMsg.textContent = "Mic Error: " + err.message;
+            }
+        }
+
+        function stopListening() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+            isListening = false;
+            const listenBtn = document.getElementById('listenBtn');
+            listenBtn.classList.remove("listening");
+            listenBtn.textContent = "🎤 Listen";
+            document.getElementById('statusMessage').textContent = "Ready";
+        }
+
+        function handleResult(text) {
+            console.log("Result:", text);
+            document.getElementById('resultText').innerText = text;
+
+            // Check Similarity
+            const similarity = stringSimilarity.compareTwoStrings(text.toLowerCase(), currentWord.toLowerCase());
+            const scorePct = Math.round(similarity * 100);
+
+            const matchScoreDiv = document.getElementById('matchScore');
+            matchScoreDiv.style.display = "block";
+            matchScoreDiv.innerText = `Match Accuracy: ${scorePct}%`;
+
+            if (scorePct >= 80 || text.toLowerCase().includes(currentWord.toLowerCase())) {
+                document.getElementById('statusMessage').textContent = "✅ Correct! Loading next...";
+                document.getElementById('statusMessage').style.color = "green";
+                stopListening();
+
+                setTimeout(() => {
+                    nextQuestion();
+                }, 1500);
+            } else {
+                document.getElementById('statusMessage').textContent = "Try Again";
+                // stopListening(); // Optional: stop or keep listening? User said "Listen button... activates...", implies maybe manual stop or one-shot. Let's keep listening until success or stop.
+                // Actually, if we get a "Result" (final), Vosk usually resets. We need to stay in the session.
+            }
+        }
+
+        function nextQuestion() {
+            alert("Next Question Triggered!");
+            // Reset logic
+            document.getElementById('statusMessage').textContent = "Ready";
+            document.getElementById('statusMessage').style.color = "#666";
+            document.getElementById('resultText').innerText = "...";
+            document.getElementById('matchScore').style.display = "none";
+        }
+
+        // Initialize on load
+        window.onload = init;
+
+    </script>
+</body>
+
+</html>
