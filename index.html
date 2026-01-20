@@ -5,10 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vocab Speech Test</title>
-    <script src="coi-serviceworker.js"></script>
-    <!-- Vosk Browser and String Similarity via CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk.js"></script>
-    <script src="https://unpkg.com/string-similarity/umd/string-similarity.min.js"></script>
+    <!-- 1. COI Service Worker (Must be first) -->
+    <script src="./coi-serviceworker.js"></script>
+    <!-- 2. Local Vosk Library -->
+    <script src="./vosk.js"></script>
+    <!-- 3. Local String Similarity -->
+    <script src="./string-similarity.min.js"></script>
 
     <style>
         body {
@@ -134,7 +136,7 @@
     </div>
 
     <script>
-        const MODEL_URL = 'vosk-model-small-en-us.zip';
+        const MODEL_URL = './model.tar.gz';
         let model = null;
         let recognizer = null;
         let mediaStream = null;
@@ -151,7 +153,14 @@
             const progress = document.getElementById('modelProgress');
             const listenBtn = document.getElementById('listenBtn');
 
-            statusMsg.textContent = "Downloading Model...";
+            // 0. Library Check
+            if (typeof Vosk === 'undefined' || typeof stringSimilarity === 'undefined') {
+                statusMsg.textContent = "Libraries failed to load. Please refresh the page.";
+                statusMsg.style.color = "red";
+                return;
+            }
+
+            statusMsg.textContent = "Downloading speech model...";
             progress.style.display = "block";
 
             try {
@@ -160,7 +169,7 @@
                 if (!response.ok) throw new Error(`Failed to fetch model: ${response.statusText}`);
 
                 const contentLength = +response.headers.get('Content-Length');
-                const total = contentLength || 50 * 1024 * 1024; // Fallback to 50MB if header missing
+                const total = contentLength || 20 * 1024 * 1024; // Fallback to 20MB approx for tar.gz if header missing
 
                 const reader = response.body.getReader();
                 let receivedLength = 0;
@@ -175,30 +184,30 @@
                     // Update Progress
                     const pct = Math.round((receivedLength / total) * 100);
                     progress.value = pct;
-                    statusMsg.textContent = `Downloading Model: ${pct}%`;
+                    statusMsg.textContent = `Downloading speech model: ${pct}%`;
                 }
 
-                statusMsg.textContent = "Processing Model...";
-                const blob = new Blob(chunks, { type: "application/zip" });
+                statusMsg.textContent = "Extracting voice data...";
+                // Note: using input type "application/gzip" or just letting Vosk handle the blob usually works better with the tar.gz if the library supports it.
+                // The vosk-browser build typically expects a zip or tar.gz. We pass the blob URL.
+                const blob = new Blob(chunks, { type: "application/x-gzip" }); // tar.gz is gzip
                 const modelUrl = URL.createObjectURL(blob);
 
                 // 2. Initialize Vosk
                 // Note: Vosk.createModel accepts a URL. We pass the Blob URL.
-                // Depending on the channel build, we might need configuration. 
-                // We use the default generic build.
                 const channel = new MessageChannel();
                 model = await Vosk.createModel(modelUrl);
 
                 // Creation complete
-                statusMsg.textContent = "Ready";
+                statusMsg.textContent = "Ready! Click the microphone to start.";
                 progress.style.display = "none";
                 listenBtn.style.display = "inline-block";
 
                 // Initialize Audio Context ahead of time to handle permissions
                 recognizer = new model.KaldiRecognizer(48000);
 
-                // Word List Grammar (Optional optimization)
-                // recognizer.setWords(true);
+                // Set words to true for better processing if needed, though default is usually fine for simple tasks.
+                recognizer.setWords(true);
 
                 listenBtn.onclick = toggleListen;
 
@@ -235,21 +244,15 @@
 
                 const source = audioContext.createMediaStreamSource(mediaStream);
 
-                // Use AudioWorklet if available, or ScriptProcessor as fallback
-                // For simplicity in this single file, we use ScriptProcessor (deprecated but simple)
-                // or use the Vosk helper if available. 
-                // Let's use the provided Recognizer API pattern.
-
+                // Use ScriptProcessor for wide compatibility
                 recognizerNode = audioContext.createScriptProcessor(4096, 1, 1);
 
                 recognizerNode.onaudioprocess = (event) => {
                     if (!recognizer) return;
                     try {
                         const inputBuffer = event.inputBuffer;
-                        const channelData = inputBuffer.getChannelData(0); // Float32
-                        // Vosk expects AudioBuffer or similar. 
-                        // The vosk-browser library usually handles Float32Arrays if using the high level API
-                        // BUT common implementation requires sending the data to the recognizer:
+                        // const channelData = inputBuffer.getChannelData(0); 
+                        // Vosk acceptWaveform expects buffer
                         recognizer.acceptWaveform(event.inputBuffer);
                     } catch (e) {
                         console.error("Audio Process Error", e);
@@ -294,7 +297,7 @@
             const listenBtn = document.getElementById('listenBtn');
             listenBtn.classList.remove("listening");
             listenBtn.textContent = "🎤 Listen";
-            document.getElementById('statusMessage').textContent = "Ready";
+            document.getElementById('statusMessage').textContent = "Ready! Click the microphone to start.";
         }
 
         function handleResult(text) {
@@ -302,6 +305,7 @@
             document.getElementById('resultText').innerText = text;
 
             // Check Similarity
+            // Use window.stringSimilarity to be safe with the global build
             const similarity = stringSimilarity.compareTwoStrings(text.toLowerCase(), currentWord.toLowerCase());
             const scorePct = Math.round(similarity * 100);
 
@@ -319,15 +323,16 @@
                 }, 1500);
             } else {
                 document.getElementById('statusMessage').textContent = "Try Again";
-                // stopListening(); // Optional: stop or keep listening? User said "Listen button... activates...", implies maybe manual stop or one-shot. Let's keep listening until success or stop.
-                // Actually, if we get a "Result" (final), Vosk usually resets. We need to stay in the session.
+                // Don't stop listening, let them try again immediately within the same session if possible
+                // But Vosk usually finalizes on result, so we might need to restart or just let the flow continue
+                // For this simple logic, we keep current listening state until user stops or success.
             }
         }
 
         function nextQuestion() {
             alert("Next Question Triggered!");
             // Reset logic
-            document.getElementById('statusMessage').textContent = "Ready";
+            document.getElementById('statusMessage').textContent = "Ready! Click the microphone to start.";
             document.getElementById('statusMessage').style.color = "#666";
             document.getElementById('resultText').innerText = "...";
             document.getElementById('matchScore').style.display = "none";
