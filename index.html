@@ -4,390 +4,67 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vocab Speech Test</title>
-    <!-- 1. COI Service Worker (Must be first) -->
+    <title>English App Phase 1</title>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/style.css">
+
+    <!-- Libraries (Root Scope for COI) -->
     <script src="./coi-serviceworker.js"></script>
-    <!-- 2. Local Vosk Library -->
     <script src="./vosk.js"></script>
-    <!-- 3. Local String Similarity -->
     <script src="./string-similarity.min.js"></script>
 
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            background: #f0f2f5;
-            margin: 0;
-        }
-
-        .container {
-            background: white;
-            padding: 2rem;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            text-align: center;
-            max-width: 400px;
-            width: 100%;
-        }
-
-        h1 {
-            margin-bottom: 20px;
-            font-size: 1.5rem;
-            color: #333;
-        }
-
-        .status {
-            margin: 15px 0;
-            font-weight: bold;
-            color: #666;
-        }
-
-        button {
-            padding: 10px 20px;
-            font-size: 1rem;
-            cursor: pointer;
-            border: none;
-            border-radius: 6px;
-            margin: 5px;
-            transition: background 0.2s;
-        }
-
-        #listenBtn {
-            background-color: #007bff;
-            color: white;
-            display: none;
-        }
-
-        #listenBtn:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-
-        #listenBtn.listening {
-            background-color: #dc3545;
-            animation: pulse 1.5s infinite;
-        }
-
-        progress {
-            width: 100%;
-            margin-top: 10px;
-            height: 20px;
-            display: none;
-        }
-
-        .result-box {
-            margin-top: 20px;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 6px;
-            min-height: 50px;
-            font-size: 1.2rem;
-        }
-
-        .target-word {
-            color: #888;
-            font-size: 0.9rem;
-            margin-top: 5px;
-        }
-
-        .match-score {
-            font-size: 0.8rem;
-            color: #28a745;
-            margin-top: 5px;
-            display: none;
-        }
-
-        @keyframes pulse {
-            0% {
-                transform: scale(1);
-            }
-
-            50% {
-                transform: scale(1.05);
-            }
-
-            100% {
-                transform: scale(1);
-            }
-        }
-    </style>
+    <!-- App Logic -->
+    <script src="js/curriculum.js" defer></script>
+    <script src="js/vosk-logic.js" defer></script>
+    <script src="js/app.js" defer></script>
 </head>
 
 <body>
 
-    <div class="container">
-        <h1>Speech Quiz Test</h1>
+    <!-- Global Status -->
+    <div id="engine-status">Engine Status: Pending...</div>
 
-        <div class="status" id="statusMessage">Initializing...</div>
+    <!-- VIEWS -->
 
-        <progress id="modelProgress" value="0" max="100"></progress>
-
-        <!-- Target Word for Testing -->
-        <div class="target-word">Target: <span id="targetWord">hello</span></div>
-
-        <button id="listenBtn">🎤 Listen</button>
-
-        <div class="result-box" id="resultText">...</div>
-        <div class="match-score" id="matchScore"></div>
+    <!-- 1. Login -->
+    <div id="login-view" class="view">
+        <h1>Welcome Back!</h1>
+        <p>Phase 1 Prototype</p>
+        <button id="login-btn">Login as Student</button>
     </div>
 
-    <script>
-        const FAST_MODEL_URL = 'https://ghp.ci/https://github.com/vpietri-stack/speechtest3/raw/main/model.tar.gz';
-        const LOCAL_MODEL_URL = './model.tar.gz';
-        const CACHE_NAME = 'vosk-model-cache-v1';
+    <!-- 2. Dashboard -->
+    <div id="dashboard-view" class="view">
+        <header style="text-align:center; padding: 20px;">
+            <h2>My Dashboard</h2>
+        </header>
+        <div id="units-container">
+            <!-- Populated by JS -->
+        </div>
+    </div>
 
-        let model = null;
-        let recognizer = null;
-        let mediaStream = null;
-        let audioContext = null;
-        let recognizerNode = null;
-        let isListening = false;
+    <!-- 3. Lesson Overview -->
+    <div id="lesson-overview" class="view">
+        <button id="back-to-dash">⬅ Back</button>
+        <div id="lesson-details" style="text-align: center; margin-top:20px;">
+            <!-- Populated by JS -->
+        </div>
+    </div>
 
-        // Mock Game Logic
-        const currentWord = "hello";
-        document.getElementById('targetWord').textContent = currentWord;
+    <!-- 4. Practice (Speaking) -->
+    <div id="practice-view" class="view">
+        <button id="back-to-lesson">⬅ Finish Practice</button>
+        <div id="practice-container">
+            <!-- Populated by JS -->
+        </div>
+    </div>
 
-        async function init() {
-            const statusMsg = document.getElementById('statusMessage');
-            const progress = document.getElementById('modelProgress');
-            const listenBtn = document.getElementById('listenBtn');
+    <!-- 5. Game (Empty) -->
+    <div id="game-view" class="view">
+        <!-- Phaser Canvas would go here -->
+    </div>
 
-            // 0. Library Check
-            if (typeof Vosk === 'undefined' || typeof stringSimilarity === 'undefined') {
-                statusMsg.textContent = "Libraries failed to load. Please refresh the page.";
-                statusMsg.style.color = "red";
-                return;
-            }
-
-            try {
-                // 1. Smart Model Loading
-                const blob = await loadModelSmartly(statusMsg, progress);
-
-                statusMsg.textContent = "Extracting voice data...";
-                const modelUrl = URL.createObjectURL(blob);
-
-                // 2. Initialize Vosk
-                const channel = new MessageChannel();
-                model = await Vosk.createModel(modelUrl);
-
-                // Creation complete
-                statusMsg.textContent = "Ready! Click the microphone to start.";
-                progress.style.display = "none";
-                listenBtn.style.display = "inline-block";
-
-                // Initialize Audio Context (Lazy load details later, but setup recognizer)
-                recognizer = new model.KaldiRecognizer(48000);
-                recognizer.setWords(true);
-                listenBtn.onclick = toggleListen;
-
-            } catch (err) {
-                console.error(err);
-                statusMsg.textContent = "Error: " + err.message;
-                statusMsg.style.color = "red";
-            }
-        }
-
-        async function loadModelSmartly(statusMsg, progress) {
-            // A. Check Cache First
-            try {
-                const cache = await caches.open(CACHE_NAME);
-                const cachedResponse = await cache.match(FAST_MODEL_URL); // Key off the main/fast URL
-
-                if (cachedResponse) {
-                    console.log("Loading from cache...");
-                    statusMsg.textContent = "Loading from cache...";
-                    return await cachedResponse.blob();
-                }
-            } catch (e) {
-                console.warn("Cache access failed", e);
-            }
-
-            // B. Try Fast Mirror with Timeout
-            try {
-                console.log("Attempting fast download...");
-                statusMsg.textContent = "Downloading from fast mirror...";
-                progress.style.display = "block";
-
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
-
-                const response = await fetch(FAST_MODEL_URL, { signal: controller.signal });
-                clearTimeout(timeoutId);
-
-                if (!response.ok) throw new Error("Fast mirror failed");
-
-                // Track Progress logic wrapper
-                const blob = await fetchWithProgress(response, statusMsg, progress, "Downloading from fast mirror");
-
-                // Save to Cache
-                saveToCache(blob);
-
-                return blob;
-
-            } catch (err) {
-                console.warn("Fast download failed or timed out:", err);
-                // C. Fallback to Local
-                statusMsg.textContent = "Connection slow. Switching to local backup...";
-                console.log("Switching to local backup...");
-
-                const response = await fetch(LOCAL_MODEL_URL);
-                if (!response.ok) throw new Error("Local model file missing");
-
-                const blob = await fetchWithProgress(response, statusMsg, progress, "Downloading from local backup");
-
-                // Save to Cache (so next time it is instant)
-                saveToCache(blob);
-
-                return blob;
-            }
-        }
-
-        async function fetchWithProgress(response, statusMsg, progress, messagePrefix) {
-            const contentLength = +response.headers.get('Content-Length');
-            const total = contentLength || 20 * 1024 * 1024; // ~20MB fallback
-
-            const reader = response.body.getReader();
-            let receivedLength = 0;
-            let chunks = [];
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                chunks.push(value);
-                receivedLength += value.length;
-
-                const pct = Math.round((receivedLength / total) * 100);
-                progress.value = pct;
-                statusMsg.textContent = `${messagePrefix}: ${pct}%`;
-            }
-
-            // Return as Blob using generic type (Vosk detects content)
-            return new Blob(chunks, { type: "application/x-gzip" });
-        }
-
-        async function saveToCache(blob) {
-            try {
-                const cache = await caches.open(CACHE_NAME);
-                // We save it under the FAST_MODEL_URL key so that next time we find it there,
-                // effectively "upgrading" the user to a cached state regardless of where it came from.
-                const responseToCache = new Response(blob);
-                await cache.put(FAST_MODEL_URL, responseToCache);
-                console.log("Model saved to cache.");
-            } catch (e) {
-                console.warn("Failed to save to cache", e);
-            }
-        }
-
-        async function toggleListen() {
-            if (isListening) {
-                stopListening();
-            } else {
-                startListening();
-            }
-        }
-
-        async function startListening() {
-            const listenBtn = document.getElementById('listenBtn');
-            const statusMsg = document.getElementById('statusMessage');
-
-            try {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-                mediaStream = await navigator.mediaDevices.getUserMedia({
-                    video: false,
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        channelCount: 1,
-                        sampleRate: 48000
-                    }
-                });
-
-                const source = audioContext.createMediaStreamSource(mediaStream);
-
-                // Use ScriptProcessor for max compatibility on older Androids etc.
-                recognizerNode = audioContext.createScriptProcessor(4096, 1, 1);
-
-                recognizerNode.onaudioprocess = (event) => {
-                    if (!recognizer) return;
-                    try {
-                        recognizer.acceptWaveform(event.inputBuffer);
-                    } catch (e) {
-                        console.error("Audio Process Error", e);
-                    }
-                };
-
-                recognizer.on("result", (message) => {
-                    if (message.result.text) handleResult(message.result.text);
-                });
-
-                recognizer.on("partialresult", (message) => {
-                    document.getElementById('resultText').innerText = message.result.partial + "...";
-                });
-
-                source.connect(recognizerNode);
-                recognizerNode.connect(audioContext.destination);
-
-                isListening = true;
-                listenBtn.classList.add("listening");
-                listenBtn.textContent = "🛑 Stop";
-                statusMsg.textContent = "Listening...";
-
-            } catch (err) {
-                console.error(err);
-                statusMsg.textContent = "Mic Error: " + err.message;
-            }
-        }
-
-        function stopListening() {
-            if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
-            }
-            if (audioContext) {
-                audioContext.close();
-            }
-            isListening = false;
-            const listenBtn = document.getElementById('listenBtn');
-            listenBtn.classList.remove("listening");
-            listenBtn.textContent = "🎤 Listen";
-            document.getElementById('statusMessage').textContent = "Ready! Click the microphone to start.";
-        }
-
-        function handleResult(text) {
-            console.log("Result:", text);
-            document.getElementById('resultText').innerText = text;
-
-            const similarity = stringSimilarity.compareTwoStrings(text.toLowerCase(), currentWord.toLowerCase());
-            const scorePct = Math.round(similarity * 100);
-
-            const matchScoreDiv = document.getElementById('matchScore');
-            matchScoreDiv.style.display = "block";
-            matchScoreDiv.innerText = `Match Accuracy: ${scorePct}%`;
-
-            if (scorePct >= 80 || text.toLowerCase().includes(currentWord.toLowerCase())) {
-                document.getElementById('statusMessage').textContent = "✅ Correct! Loading next...";
-                document.getElementById('statusMessage').style.color = "green";
-                stopListening();
-                setTimeout(nextQuestion, 1500);
-            } else {
-                document.getElementById('statusMessage').textContent = "Try Again";
-            }
-        }
-
-        function nextQuestion() {
-            alert("Next Question Triggered!");
-            document.getElementById('statusMessage').textContent = "Ready! Click the microphone to start.";
-            document.getElementById('statusMessage').style.color = "#666";
-            document.getElementById('resultText').innerText = "...";
-            document.getElementById('matchScore').style.display = "none";
-        }
-
-        window.onload = init;
-
-    </script>
 </body>
 
 </html>

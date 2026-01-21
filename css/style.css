@@ -1,0 +1,116 @@
+/* Base */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    background: #f4f4f9;
+    color: #333;
+    /* Prevent scrolling if not needed, or allow */
+    min-height: 100vh;
+}
+
+h1, h2, h3 { color: #2c3e50; }
+
+/* Views */
+.view {
+    display: none; /* Hidden by default */
+    padding: 20px;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+/* Specific Views */
+#login-view {
+    text-align: center;
+    padding-top: 100px;
+}
+
+/* Components */
+.card {
+    background: white;
+    padding: 15px;
+    margin: 10px 0;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+    border: 1px solid #eee;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+button {
+    background: #4a90e2;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    margin: 5px;
+    transition: background 0.2s;
+}
+
+button:hover { background: #357abd; }
+
+.mic-btn {
+    background: #28a745;
+    font-size: 1.2rem;
+    padding: 15px 30px;
+    border-radius: 50px;
+    display: block;
+    margin: 20px auto;
+    width: fit-content;
+}
+.mic-btn.active {
+    background: #dc3545;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+}
+
+/* Status Bar */
+#engine-status {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #34495e;
+    color: white;
+    text-align: center;
+    padding: 8px;
+    font-size: 0.85rem;
+    z-index: 1000;
+}
+
+.status-indicator.loading { color: #f1c40f; font-weight: bold; }
+.status-indicator.ready { color: #2ecc71; font-weight: bold; }
+.status-indicator.error { color: #e74c3c; font-weight: bold; }
+
+.result-box {
+    margin: 20px 0;
+    padding: 20px;
+    background: white;
+    border-radius: 8px;
+    min-height: 50px;
+    border: 2px dashed #ddd;
+    text-align: center;
+    font-size: 1.1rem;
+}
+
+.target-sentence {
+    font-size: 1.2rem;
+    font-weight: bold;
+    text-align: center;
+    color: #444;
+    margin-bottom: 20px;
+    padding: 10px;
+    background: #e8f4fd;
+    border-radius: 5px;
+}
